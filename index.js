@@ -213,12 +213,11 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     await client.connect();
+    console.log('✅ Connected to MongoDB');
 
     const lawyerCollection = client.db('lawfirm').collection('lawyers');
     const usersCollection = client.db('lawfirm').collection('users');
     const appointmentCollection = client.db('lawfirm').collection('appointments');
-
-    console.log('✅ Connected to MongoDB');
 
     // ==========================
     // Lawyer Routes
@@ -363,13 +362,14 @@ async function run() {
       res.send('🧑‍⚖️ Lawfirm server is running');
     });
 
+    // ✅ Start server after MongoDB connection
+    app.listen(port, () => {
+      console.log(`⚖️ Server listening on port ${port}`);
+    });
+
   } catch (err) {
     console.error('❌ MongoDB connection failed', err);
   }
 }
 
 run().catch(console.dir);
-
-app.listen(port, () => {
-  console.log(`⚖️ Server listening on port ${port}`);
-});
