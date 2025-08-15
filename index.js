@@ -1,128 +1,196 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { MongoClient, ServerApiVersion } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
-import fs from 'fs';
 import path from 'path';
+import fs from 'fs';
 
+// Initialize app and config
 dotenv.config();
 const app = express();
 const port = process.env.PORT || 5000;
 
-// Middleware
-app.use(cors());
+// Middleware setup
+app.use(cors({
+  origin: 'http://localhost:5173',
+  credentials: true
+}));
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// নিশ্চিত করো uploads ফোল্ডার আছে
-const uploadDir = path.join(process.cwd(), 'uploads');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+// File upload configuration
+const uploadsDir = path.join(process.cwd(), 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
-// Multer config
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
+  destination: (req, file, cb) => cb(null, uploadsDir),
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
     cb(null, uniqueSuffix + path.extname(file.originalname));
   }
 });
 const upload = multer({ storage });
 
-// Static uploads route
-app.use('/uploads', express.static(uploadDir));
-
-// MongoDB connection
-const uri = process.env.MONGO_URI;
-const client = new MongoClient(uri, {
-  serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true }
-});
-
-let userCollection;
-let appointmentCollection;
+// Database connection
+const client = new MongoClient(process.env.MONGO_URI);
+let db, usersCollection;
 
 async function connectDB() {
-  await client.connect();
-  const db = client.db('testdb');
-  userCollection = db.collection('users');
-  appointmentCollection = db.collection('appointments');
-  console.log('✅ MongoDB Connected');
+  try {
+    await client.connect();
+    db = client.db('lawfirm');
+    usersCollection = db.collection('users');
+    console.log('✅ MongoDB connected successfully');
+  } catch (err) {
+    console.error('❌ MongoDB connection failed:', err);
+    process.exit(1);
+  }
 }
-connectDB().catch(console.error);
 
-/* ========================= SIGNUP ========================= */
+// Helper function for error responses
+const sendResponse = (res, status, success, message, data = null) => {
+  return res.status(status).json({ success, message, ...(data && { data }) });
+};
+
+// Routes
 app.post('/signup', upload.single('photo'), async (req, res) => {
   try {
-    const username = req.body.username?.trim();
-    const email = req.body.email?.trim().toLowerCase();
-    const password = req.body.password?.trim();
+    const { name, email, password, gender, role = 'client' } = req.body;
 
-    if (!username || !email || !password) {
-      return res.status(400).json({ message: 'Please provide all fields' });
+    // Validation
+    if (!name || !email || !password) {
+      return sendResponse(res, 400, false, 'Name, email, and password are required');
     }
 
-    // Duplicate check
-    const existingUser = await userCollection.findOne({ email });
-    if (existingUser) return res.status(400).json({ message: 'Email already exists' });
+    // Check for existing user
+    const existingUser = await usersCollection.findOne({ email });
+    if (existingUser) {
+      return sendResponse(res, 409, false, 'Email already registered');
+    }
 
-    // Password hash
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const photoUrl = req.file ? `/uploads/${req.file.filename}` : null;
+    // Hash password and create user
+    const hashedPassword = await bcrypt.hash(password, 12);
+    const newUser = {
+      name,
+      email,
+      password: hashedPassword,
+      gender,
+      role,
+      photo: req.file?.filename || null,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
 
-    // Save to DB
-    await userCollection.insertOne({ username, email, password: hashedPassword, photo: photoUrl });
-    res.status(201).json({ message: 'User registered successfully', photo: photoUrl });
+    // Insert new user
+    const result = await usersCollection.insertOne(newUser);
+    const userId = result.insertedId;
+
+    // Return success response (excluding password)
+    const userData = {
+      id: userId,
+      name: newUser.name,
+      email: newUser.email,
+      role: newUser.role,
+      photo: newUser.photo
+    };
+
+    return sendResponse(res, 201, true, 'User registered successfully', userData);
+
   } catch (error) {
-    console.error('Signup Error:', error);
-    res.status(500).json({ message: 'Something went wrong' });
+    console.error('Signup error:', error);
+    return sendResponse(res, 500, false, 'Internal server error');
   }
 });
 
-/* ========================= LOGIN ========================= */
 app.post('/login', async (req, res) => {
   try {
-    const email = req.body.email?.trim().toLowerCase();
-    const password = req.body.password?.trim();
+    const { email, password } = req.body;
 
-    if (!email || !password) return res.status(400).json({ message: 'Please provide all fields' });
+    // Validation
+    if (!email || !password) {
+      return sendResponse(res, 400, false, 'Email and password are required');
+    }
 
-    const user = await userCollection.findOne({ email });
-    if (!user) return res.status(400).json({ message: 'Invalid email or password' });
+    // Find user
+    const user = await usersCollection.findOne({ email });
+    if (!user) {
+      return sendResponse(res, 401, false, 'Invalid credentials');
+    }
 
+    // Verify password
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ message: 'Invalid email or password' });
+    if (!isMatch) {
+      return sendResponse(res, 401, false, 'Invalid credentials');
+    }
 
-    res.status(200).json({ message: 'Login successful', user });
+    // Successful login response (excluding password)
+    const userData = {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      photo: user.photo
+    };
+
+    return sendResponse(res, 200, true, 'Login successful', userData);
+
   } catch (error) {
-    console.error('Login Error:', error);
-    res.status(500).json({ message: 'Something went wrong' });
+    console.error('Login error:', error);
+    return sendResponse(res, 500, false, 'Internal server error');
   }
 });
 
-/* ========================= APPOINTMENT ========================= */
+// ====================== Appointment Route ======================
 app.post('/appointments', async (req, res) => {
   try {
-    const { name, email, phone, date, time, message } = req.body;
-    if (!name || !email || !phone || !date || !time)
-      return res.status(400).json({ message: 'Please provide all required fields' });
+    const { name, email, phone, date, time } = req.body;
 
-    const appointment = { name, email, phone, date, time, message: message || '', createdAt: new Date() };
-    await appointmentCollection.insertOne(appointment);
-    res.status(201).json({ message: 'Appointment booked successfully', appointment });
+    // Validation
+    if (!name || !email || !phone || !date || !time) {
+      return sendResponse(res, 400, false, 'All fields are required');
+    }
+
+    // Optional: You can add logic to prevent double-booking
+    const existing = await db.collection('appointments').findOne({ date, time });
+    if (existing) {
+      return sendResponse(res, 409, false, 'This time slot is already booked');
+    }
+
+    // Create appointment
+    const newAppointment = {
+      name,
+      email,
+      phone,
+      date,
+      time,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const result = await db.collection('appointments').insertOne(newAppointment);
+
+    return sendResponse(res, 201, true, 'Appointment booked successfully', {
+      id: result.insertedId,
+      ...newAppointment
+    });
+
   } catch (error) {
-    console.error('Appointment Error:', error);
-    res.status(500).json({ message: 'Something went wrong' });
+    console.error('Appointment booking error:', error);
+    return sendResponse(res, 500, false, 'Internal server error');
   }
 });
 
-app.get('/appointments', async (req, res) => {
-  try {
-    const appointments = await appointmentCollection.find().toArray();
-    res.status(200).json(appointments);
-  } catch (error) {
-    console.error('Get Appointments Error:', error);
-    res.status(500).json({ message: 'Something went wrong' });
-  }
-});
 
-app.listen(port, () => console.log(`🚀 Server running on port ${port}`));
+// Start server
+(async () => {
+  await connectDB();
+  app.listen(port, () => {
+    console.log(`🚀 Server running on http://localhost:${port}`);
+    console.log(`🔑 Signup endpoint: POST http://localhost:${port}/signup`);
+    console.log(`🔐 Login endpoint: POST http://localhost:${port}/login`);
+  });
+})();
