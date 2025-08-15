@@ -12,13 +12,20 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 5000;
 
+// // Middleware setup
+// app.use(cors({
+//   origin: 'http://localhost:5173',
+//   credentials: true
+// }));
+// app.use(express.json());
+// app.use(express.urlencoded({ extended: true }));
+
 // Middleware setup
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: ['http://localhost:5173', 'https://lawvault-app.surge.sh/'], // add your frontend deploy link here
   credentials: true
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
 
 // File upload configuration
 const uploadsDir = path.join(process.cwd(), 'uploads');
